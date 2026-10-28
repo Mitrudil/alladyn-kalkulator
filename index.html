@@ -238,6 +238,7 @@
 <label style="grid-column:1/-1">Numer oferty / kosztorysu<input id="pdfDocumentNumber" type="text" maxlength="90"></label>
 <label>Data dokumentu<input id="pdfDocumentDate" type="date"></label>
 <label id="pdfValidWrap">Ważna do<input id="pdfDocumentValid" type="date"></label>
+<label style="grid-column:1/-1">Stawka VAT dla tej oferty<select id="pdfVatRate"><option value="23">23% — standardowa</option><option value="8">8% — gdy spełnione warunki</option><option value="5">5% — gdy ma zastosowanie</option><option value="0">0% — gdy ma zastosowanie</option></select></label>
 </div>
 <p class="small-note" id="pdfConfigHint"></p>
 <div class="controls"><button class="btn gold" type="button" onclick="printSavedEstimate()">Otwórz wydruk / Zapisz PDF</button><button class="btn" type="button" onclick="closeEstimatePdfConfig()">Anuluj</button></div>
@@ -963,7 +964,7 @@ function openEstimateVersion(id){
 }
 
 
-/* ALLADYN v1.7 — documents generated exclusively from a saved version snapshot. */
+/* ALLADYN v1.7.2 — documents generated exclusively from a saved version snapshot. */
 let pdfExportSelection=null;
 function pdfDateLocal(d){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day}
 function pdfDatePL(value){const a=String(value||'').split('-');return a.length===3?a[2]+'.'+a[1]+'.'+a[0]:String(value||'—')}
@@ -974,11 +975,11 @@ function configureEstimatePdf(id,kind){
  if(!e||!r){alert('Nie udało się znaleźć danych realizacji. Odśwież listę.');return}
  pdfExportSelection={id,kind};
  const now=new Date(),later=new Date(now.getTime());later.setDate(later.getDate()+14);
- $('pdfDocumentNumber').value='ALLADYN/'+now.getFullYear()+'/'+(e.id||'').slice(0,8).toUpperCase()+'/V'+v.version_number;
- $('pdfDocumentDate').value=pdfDateLocal(now);$('pdfDocumentValid').value=pdfDateLocal(later);
+ $('pdfDocumentNumber').value='ALLADYN/'+now.getFullYear()+'/'+(e.id||'').slice(0,8).toUpperCase()+(kind==='client'?'':'/V'+v.version_number);
+ $('pdfDocumentDate').value=pdfDateLocal(now);$('pdfDocumentValid').value=pdfDateLocal(later);$('pdfVatRate').value='23';
  $('pdfConfigTitle').textContent=kind==='client'?'Oferta dla klienta — PDF':'Kosztorys wewnętrzny — PDF';
  $('pdfValidWrap').style.display=kind==='client'?'block':'none';
- $('pdfConfigHint').textContent=kind==='client'?'Dokument dla klienta nie zawiera cen zakupowych, mnożników, kosztów wewnętrznych ani zysku.':'Dokument poufny: pokazuje koszty, narzuty, sprzedaż i wynik. Udostępniaj tylko osobom upoważnionym.';
+ $('pdfConfigHint').textContent=(kind==='client'?'Dokument dla klienta nie zawiera cen zakupowych, mnożników, kosztów wewnętrznych ani zysku. ':'Dokument poufny: pokazuje koszty, narzuty, sprzedaż i wynik. ')+'Dobierz właściwą stawkę VAT do konkretnej transakcji; kalkulator nie ocenia uprawnień do 8% lub innych stawek.';
  $('pdfConfigModal').classList.add('on');document.body.style.overflow='hidden';
 }
 function closeEstimatePdfConfig(){$('pdfConfigModal').classList.remove('on');document.body.style.overflow=$('realModal').classList.contains('on')?'hidden':'';pdfExportSelection=null}
@@ -986,40 +987,47 @@ function pdfMoney(n){return formatPL(Number(n)||0)+' zł'}
 function pdfNumber(n){return formatPL(Number(n)||0,2)}
 function pdfEsc(x){return safeHtml(x)}
 function pdfTable(headers,rows){return '<table><thead><tr>'+headers.map(h=>'<th>'+pdfEsc(h)+'</th>').join('')+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map(c=>'<td>'+c+'</td>').join('')+'</tr>').join('')+'</tbody></table>'}
-function renderEstimatePdfHtml(v,e,r,kind,num,issue,valid){
+function renderEstimatePdfHtml(v,e,r,kind,num,issue,valid,vatRate){
  const s=v.snapshot||{}, t=s.totals||{},client=kind==='client';
+ const vat=Number(vatRate)/100;
+ const gross=n=>(Number(n)||0)*(1+vat);
+ const totalNet=Number(t.totalRevenueNet)||0;
+ const totalVat=Math.round(totalNet*vat*100)/100;
+ const totalGross=totalNet+totalVat;
  const dateSaved=displayDate(v.created_at);
  const docTitle=client?'Oferta na wykonanie prac podłogowych':'Kosztorys wewnętrzny — poufny';
  const rows=[];
  for(const i of (s.items||[])){
   const area=Number(i.area)||0, revenue=Number(i.revenueNet)||0;
   const descr=pdfEsc(i.productName||'Materiał');
-  if(client){rows.push([descr,pdfNumber(area)+' m²',pdfMoney(area>0?revenue/area:0)+' / m²',pdfMoney(revenue)])}
+  if(client){rows.push([descr,pdfNumber(area)+' m²',pdfMoney(area>0?revenue/area:0)+' / m²',pdfMoney(revenue),pdfMoney(gross(revenue))])}
   else{rows.push([descr,pdfNumber(area)+' m²',pdfNumber(i.qtyKg)+' kg',pdfNumber(i.packages)+' × '+pdfNumber(i.packKg)+' kg',pdfMoney(i.purchaseNet),pdfMoney(revenue)])}
  }
- const materialHeads=client?['Materiał','Powierzchnia','Cena sprzedaży netto','Wartość netto']:['Materiał','Powierzchnia','Zapotrzebowanie','Opakowania','Zakup netto','Sprzedaż netto'];
- const laborRows=(s.labor||[]).filter(l=>Number(l.area)>0&&(Number(l.costNet)>0||Number(l.revenueNet)>0)).map(l=>client?[pdfEsc(l.name),pdfNumber(l.area)+' m²',pdfMoney(l.saleNetM2)+' / m²',pdfMoney(l.revenueNet)]:[pdfEsc(l.name),pdfNumber(l.area)+' m²',pdfMoney(l.costNetM2)+' / m²',pdfMoney(l.saleNetM2)+' / m²',pdfMoney(l.costNet),pdfMoney(l.revenueNet)]);
- const laborHeads=client?['Rodzaj pracy','Powierzchnia','Cena sprzedaży netto','Wartość netto']:['Rodzaj pracy','Powierzchnia','Koszt własny / m²','Cena klienta / m²','Koszt własny','Sprzedaż'];
+ const materialHeads=client?['Materiał','Powierzchnia','Cena netto / m²','Wartość netto','Wartość brutto']:['Materiał','Powierzchnia','Zapotrzebowanie','Opakowania','Zakup netto','Sprzedaż netto'];
+ const laborRows=(s.labor||[]).filter(l=>Number(l.area)>0&&(Number(l.costNet)>0||Number(l.revenueNet)>0)).map(l=>client?[pdfEsc(l.name),pdfNumber(l.area)+' m²',pdfMoney(l.saleNetM2)+' / m²',pdfMoney(l.revenueNet),pdfMoney(gross(l.revenueNet))]:[pdfEsc(l.name),pdfNumber(l.area)+' m²',pdfMoney(l.costNetM2)+' / m²',pdfMoney(l.saleNetM2)+' / m²',pdfMoney(l.costNet),pdfMoney(l.revenueNet)]);
+ const laborHeads=client?['Rodzaj pracy','Powierzchnia','Cena netto / m²','Wartość netto','Wartość brutto']:['Rodzaj pracy','Powierzchnia','Koszt własny / m²','Cena klienta / m²','Koszt własny','Sprzedaż'];
  const tr=s.transport||{},hasTransport=(Number(tr.costNet)||0)!==0||(Number(tr.revenueNet)||0)!==0;
- if(hasTransport){laborRows.push(client?['Transport','1 usługa',pdfMoney(tr.revenueNet),pdfMoney(tr.revenueNet)]:['Transport','1 usługa',pdfMoney(tr.costNet),pdfMoney(tr.revenueNet),pdfMoney(tr.costNet),pdfMoney(tr.revenueNet)])}
+ if(hasTransport){laborRows.push(client?['Transport','1 usługa',pdfMoney(tr.revenueNet),pdfMoney(tr.revenueNet),pdfMoney(gross(tr.revenueNet))]:['Transport','1 usługa',pdfMoney(tr.costNet),pdfMoney(tr.revenueNet),pdfMoney(tr.costNet),pdfMoney(tr.revenueNet)])}
  const headerLogo=document.querySelector('.site-head img')||document.querySelector('header img');
  const logo=headerLogo&&headerLogo.src&&headerLogo.src.startsWith('data:image/')?'<img class="brandlogo" alt="Logo ALLADYN" src="'+headerLogo.src+'">':'<div class="brandword">ALLADYN</div>';
- const metadata='<div class="meta"><div><b>Numer dokumentu:</b> '+pdfEsc(num)+'</div><div><b>Data wystawienia:</b> '+pdfDatePL(issue)+'</div>'+(client?'<div><b>Oferta ważna do:</b> '+pdfDatePL(valid)+'</div>':'')+'<div><b>Wersja kosztorysu:</b> '+v.version_number+'</div><div><b>Zapis wyceny:</b> '+pdfEsc(dateSaved)+'</div></div>';
+ const metadata='<div class="meta"><div><b>Numer dokumentu:</b> '+pdfEsc(num)+'</div><div><b>Data wystawienia:</b> '+pdfDatePL(issue)+'</div>'+(client?'<div><b>Oferta ważna do:</b> '+pdfDatePL(valid)+'</div>':'')+'<div><b>Stawka VAT:</b> '+pdfEsc(vatRate)+'%</div>'+(client?'':'<div><b>Wersja kosztorysu:</b> '+v.version_number+'</div><div><b>Zapis wyceny:</b> '+pdfEsc(dateSaved)+'</div>')+'</div>';
  const investor='<div class="info"><div><span class="small">INWESTYCJA</span><strong>'+pdfEsc(r.project_name||'—')+'</strong><span>'+pdfEsc(r.location||'Lokalizacja niepodana')+'</span></div><div><span class="small">INWESTOR / KLIENT</span><strong>'+pdfEsc(r.investor_name||'Nie podano')+'</strong><span>Powierzchnia podłogi: '+pdfNumber(s.areaM2||r.area_m2||0)+' m²</span></div></div>';
  const scope=(r.work_scope||'').trim();
- const summary=client?'<div class="summary client"><span>WARTOŚĆ OFERTY NETTO</span><strong>'+pdfMoney(t.totalRevenueNet)+'</strong></div>':'<div class="summary"><div><span>Zakup pełnych opakowań</span><b>'+pdfMoney(t.materialPurchaseNet)+'</b></div><div><span>Całkowity koszt własny</span><b>'+pdfMoney(t.totalCostNet)+'</b></div><div><span>Sprzedaż netto</span><b>'+pdfMoney(t.totalRevenueNet)+'</b></div><div class="gain"><span>Potencjalny wynik przed kosztami niewpisanymi w kalkulacji</span><b>'+pdfMoney(t.profitNet)+'</b></div></div>';
- const warning=client?'Wartości netto, bez podatku VAT. Zakres i warunki realizacji wymagają potwierdzenia w uzgodnieniach z klientem.':'Dokument wyłącznie do użytku wewnętrznego ALLADYN. Wynik nie obejmuje kosztów stałych, podatków ani kosztów nieuwzględnionych w kosztorysie.';
- const css=`@page{size:A4;margin:15mm 14mm 17mm}*{box-sizing:border-box}body{font-family:Arial,DejaVu Sans,sans-serif;color:#202323;font-size:10.5px;margin:0}header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #bd9c5e;padding-bottom:12px;margin-bottom:18px}.brandlogo{max-height:65px;max-width:155px;object-fit:contain}.brandword{color:#a28344;font-size:25px;letter-spacing:3px;font-weight:bold}h1{font-size:21px;margin:0 0 6px}h2{font-size:13px;margin:18px 0 8px;border-left:3px solid #bd9c5e;padding-left:9px}p{line-height:1.5}.muted{color:#666}.meta{display:grid;grid-template-columns:1fr 1fr;gap:5px 20px;font-size:10px;margin-bottom:18px}.info{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:13px 15px;background:#f4f4f2;margin-bottom:15px}.info div{display:flex;flex-direction:column;gap:5px}.small{font-size:9px;color:#85724d;letter-spacing:.6px}.info strong{font-size:12px}table{border-collapse:collapse;width:100%;font-size:9.3px}th{background:#e9e5db;text-align:left;padding:8px 6px}td{padding:7px 6px;border-bottom:1px solid #dedede;vertical-align:top}tr{break-inside:avoid}.summary{margin:20px 0 12px;border-top:2px solid #bd9c5e;padding:12px;background:#f7f5f0}.summary div{display:flex;justify-content:space-between;margin-bottom:8px}.summary .gain{border-top:1px solid #bdb8ac;padding-top:10px}.summary.client{display:flex;justify-content:space-between;align-items:center;font-size:13px}.summary.client strong{font-size:21px}.foot{margin-top:26px;border-top:1px solid #ddd;padding-top:12px;font-size:9px;color:#777}section{break-inside:auto}.scope{white-space:pre-wrap;background:#f6f6f6;padding:9px}@media print{button{display:none}}`;
- const content='<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>'+pdfEsc(docTitle)+' — '+pdfEsc(num)+'</title><style>'+css+'</style></head><body><header>'+logo+'<div style="text-align:right"><div style="color:#987d4d;font-size:12px;font-weight:bold">ALLADYN WYKŁADZINY</div><div class="muted">'+(client?'OFERTA HANDLOWA':'DOKUMENT WEWNĘTRZNY')+'</div></div></header><h1>'+docTitle+'</h1>'+metadata+investor+(scope?'<h2>Zakres prac</h2><p class="scope">'+pdfEsc(scope)+'</p>':'')+'<section><h2>Materiały</h2>'+pdfTable(materialHeads,rows)+'</section>'+(laborRows.length?'<section><h2>Robocizna i transport</h2>'+pdfTable(laborHeads,laborRows)+'</section>':'')+summary+'<div class="foot">'+pdfEsc(warning)+'<div style="margin-top:6px">Dokument wygenerowano na podstawie zapisanej wersji kosztorysu nr '+v.version_number+'.</div></div></body></html>';
+ const taxSummary='<div><span>Wartość sprzedaży netto</span><b>'+pdfMoney(totalNet)+'</b></div><div><span>Podatek VAT ('+pdfEsc(vatRate)+'%)</span><b>'+pdfMoney(totalVat)+'</b></div><div class="total-gross"><span>WARTOŚĆ BRUTTO DLA KLIENTA</span><b>'+pdfMoney(totalGross)+'</b></div>';
+ const summary=client?'<div class="summary">'+taxSummary+'</div>':'<div class="summary"><div><span>Zakup pełnych opakowań netto</span><b>'+pdfMoney(t.materialPurchaseNet)+'</b></div><div><span>Całkowity koszt własny netto</span><b>'+pdfMoney(t.totalCostNet)+'</b></div>'+taxSummary+'<div class="gain"><span>Potencjalny wynik na kwotach netto, przed kosztami niewpisanymi w kalkulacji</span><b>'+pdfMoney(t.profitNet)+'</b></div></div>';
+ const warning=client?'Ceny netto i brutto obliczono według stawki VAT wskazanej przy wystawianiu oferty. Zakres i warunki realizacji wymagają potwierdzenia w uzgodnieniach z klientem.':'Dokument wyłącznie do użytku wewnętrznego ALLADYN. Wartość brutto dotyczy sprzedaży klientowi. Koszty i potencjalny wynik przedstawiono netto; nie jest to wynik księgowy ani kwota po opodatkowaniu.';
+ const css=`@page{size:A4;margin:15mm 14mm 17mm}*{box-sizing:border-box}body{font-family:Arial,DejaVu Sans,sans-serif;color:#202323;font-size:10.5px;margin:0}header{display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #bd9c5e;padding-bottom:12px;margin-bottom:18px}.brandlogo{max-height:65px;max-width:155px;object-fit:contain}.brandword{color:#a28344;font-size:25px;letter-spacing:3px;font-weight:bold}h1{font-size:21px;margin:0 0 6px}h2{font-size:13px;margin:18px 0 8px;border-left:3px solid #bd9c5e;padding-left:9px}p{line-height:1.5}.muted{color:#666}.meta{display:grid;grid-template-columns:1fr 1fr;gap:5px 20px;font-size:10px;margin-bottom:18px}.info{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:13px 15px;background:#f4f4f2;margin-bottom:15px}.info div{display:flex;flex-direction:column;gap:5px}.small{font-size:9px;color:#85724d;letter-spacing:.6px}.info strong{font-size:12px}table{border-collapse:collapse;width:100%;font-size:9px}th{background:#e9e5db;text-align:left;padding:8px 5px}td{padding:7px 5px;border-bottom:1px solid #dedede;vertical-align:top}tr{break-inside:avoid}.summary{margin:20px 0 12px;border-top:2px solid #bd9c5e;padding:12px;background:#f7f5f0}.summary div{display:flex;justify-content:space-between;margin-bottom:8px}.summary .gain{border-top:1px solid #bdb8ac;padding-top:10px}.summary .total-gross{border-top:1px solid #bdb8ac;padding-top:10px;color:#735b2e;font-size:15px;font-weight:bold}.summary .total-gross b{font-size:18px}.foot{margin-top:26px;border-top:1px solid #ddd;padding-top:12px;font-size:9px;color:#777}section{break-inside:auto}.scope{white-space:pre-wrap;background:#f6f6f6;padding:9px}@media print{button{display:none}}`;
+ const content='<!doctype html><html lang="pl"><head><meta charset="utf-8"><title>'+pdfEsc(docTitle)+' — '+pdfEsc(num)+'</title><style>'+css+'</style></head><body><header>'+logo+'<div style="text-align:right"><div style="color:#987d4d;font-size:12px;font-weight:bold">ALLADYN WYKŁADZINY</div><div class="muted">'+(client?'OFERTA HANDLOWA':'DOKUMENT WEWNĘTRZNY')+'</div></div></header><h1>'+docTitle+'</h1>'+metadata+investor+(scope?'<h2>Zakres prac</h2><p class="scope">'+pdfEsc(scope)+'</p>':'')+'<section><h2>Materiały</h2>'+pdfTable(materialHeads,rows)+'</section>'+(laborRows.length?'<section><h2>Robocizna i transport</h2>'+pdfTable(laborHeads,laborRows)+'</section>':'')+summary+'<div class="foot">'+pdfEsc(warning)+(client?'':'<div style="margin-top:6px">Dokument wygenerowano na podstawie zapisanej wersji kosztorysu nr '+v.version_number+'.</div>')+'</div></body></html>';
  return content;
 }
+
 function printSavedEstimate(){
  if(!estimateAdmin()||!pdfExportSelection)return;
  const {id,kind}=pdfExportSelection,v=estimateVersionById(id);if(!v){alert('Nie znaleziono zapisanej wersji.');return}
  const e=realQuoteCache.find(x=>x.id===v.estimate_id),r=realizationCache.find(x=>x.id===e?.realization_id);if(!e||!r){alert('Brak danych inwestycji.');return}
- const num=$('pdfDocumentNumber').value.trim(),issue=$('pdfDocumentDate').value,valid=$('pdfDocumentValid').value;
- if(!num||!issue||(kind==='client'&&(!valid||valid<issue))){alert('Uzupełnij numer, datę i poprawny termin ważności.');return}
- const html=renderEstimatePdfHtml(v,e,r,kind,num,issue,valid);
+ const num=$('pdfDocumentNumber').value.trim(),issue=$('pdfDocumentDate').value,valid=$('pdfDocumentValid').value,vatRate=$('pdfVatRate').value;
+ if(!num||!issue||!['23','8','5','0'].includes(vatRate)||(kind==='client'&&(!valid||valid<issue))){alert('Uzupełnij numer, datę i poprawny termin ważności.');return}
+ const html=renderEstimatePdfHtml(v,e,r,kind,num,issue,valid,vatRate);
  const printWindow=window.open('','_blank');if(!printWindow){alert('Przeglądarka zablokowała nowe okno. Zezwól na wyskakujące okna dla kalkulatora i spróbuj ponownie.');return}
  printWindow.onload=()=>{printWindow.focus();printWindow.print()};
  printWindow.document.open();printWindow.document.write(html);printWindow.document.close();
