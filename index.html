@@ -69,7 +69,8 @@
 .real-meta{color:#aeb5b1;font-size:.88rem;margin-top:8px;line-height:1.55}
 .real-pill{display:inline-block;border-radius:30px;padding:5px 10px;font-size:.75rem;font-weight:bold}
 .real-pill.open{background:#143e2a;color:#9ce6b3;border:1px solid #2b8151}
-.real-pill.completed,.real-pill.cancelled{background:#48201e;color:#ffb4ae;border:1px solid #98534e}
+.real-pill.completed{background:#473818;color:#f8de96;border:1px solid #b99b56}
+.real-pill.cancelled{background:#48201e;color:#ffb4ae;border:1px solid #98534e}
 .real-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .real-form label{display:block;font-size:.88rem;color:#c4c8c6}
 .real-form input,.real-form select,.real-form textarea{display:block;width:100%;margin-top:5px}
@@ -105,7 +106,7 @@
 .quote-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.quote-actions button{font-size:.83rem}.quote-footnote{font-size:.8rem;color:#d6bc85}
 @media(max-width:760px){.estimate-toolbar .estimate-grid{grid-template-columns:1fr}}
 
-/* ALLADYN v1.7.5 — archiwum realizacji bez przenoszenia danych */
+/* ALLADYN v1.7.6 — archiwum realizacji bez przenoszenia danych */
 .real-views{display:flex;flex-wrap:wrap;gap:9px;margin:18px 0 13px}
 .real-view-btn{cursor:pointer;border:1px solid #705d32;border-radius:10px;padding:11px 16px;background:#1d1e1d;color:#e5ddca;font:inherit;font-weight:700}
 .real-view-btn.selected{background:#b99b56;color:#15140f;border-color:#d9bc75}
@@ -233,6 +234,7 @@
      <button id="realCancelBtn" class="btn" type="button" onclick="quickChangeRealizationStatus('cancelled')">✕ Anuluj realizację</button>
      <button id="realReopenBtn" class="btn" type="button" style="display:none" onclick="quickChangeRealizationStatus('open')">↶ Przywróć do aktywnych</button>
     </div>
+    <div class="real-form-actions"><button id="realDeleteBtn" class="btn" type="button" style="display:none;border-color:#98534e;color:#ffb4ae" onclick="deleteRealizationEntirely()">Usuń realizację na stałe</button></div>
     <div class="real-form-actions"><button class="btn gold" id="realSaveBtn" type="submit">Zapisz realizację</button><button class="btn" type="button" onclick="closeRealizationForm()">Zamknij bez zapisywania</button></div>
    </form>
   </div>
@@ -780,7 +782,7 @@ function openRealizationForm(id=null){
  const vals={realName:x?.project_name||'',realInvestor:x?.investor_name||'',realLocation:x?.location||'',realArea:x?.area_m2??'',realStart:x?.start_date||'',realDays:x?.estimated_days??'',realEnd:x?.estimated_end_date||'',realState:x?.status||'open',realScope:x?.work_scope||'',realMaterials:x?.materials_planned||'',realNotes:x?.notes||'',realClosure:x?.closure_reason||''};
  for(const [key,val] of Object.entries(vals))realEl(key).value=val;
  realEl('realModalInfo').textContent=x?`Dodano: ${displayDate(x.created_at)} · Aktualizacja: ${displayDate(x.updated_at)}${x.closed_at?' · Zamknięto: '+displayDate(x.closed_at):''}`:'Po zapisaniu inwestycja pojawi się na wspólnej liście.';
- realEl('realSaveBtn').disabled=false;updateRealStatusHelp();
+ realEl('realSaveBtn').disabled=false;realEl('realDeleteBtn').style.display=x?'':'none';realEl('realDeleteBtn').disabled=false;updateRealStatusHelp();
  realEl('realPhotoFiles').value='';realEl('realPhotoStatus').textContent='';realEl('realPhotoGrid').innerHTML='';
  realEl('realPhotoEditor').style.display=x?'block':'none';realEl('realQuoteSection').style.display=x?'block':'none';realEl('realQuotesList').innerHTML='';realEl('realQuotesStatus').textContent='';
  if(!x)realEl('realPhotoStatus').textContent='Zapisz nową realizację, a następnie otwórz ją ponownie, aby dodać zdjęcia.';
@@ -802,6 +804,36 @@ async function saveRealization(){
  if(res.error){realEl('realError').textContent='Nie zapisano: '+res.error.message;return}
  if(!res.data?.length){realEl('realError').textContent='Nie potwierdzono zapisu — sprawdź uprawnienia w Supabase.';return}
  closeRealizationForm();await loadRealizations();
+}
+
+
+// Trwałe usunięcie całej realizacji: baza usuwa powiązania w jednej transakcji,
+// a pliki zdjęć są usuwane z prywatnego Storage po potwierdzeniu sukcesu bazy.
+async function deleteRealizationEntirely(){
+ if(!activeRealizationId||!db||!currentUser||currentRole!=='admin')return;
+ const id=activeRealizationId;
+ const project=realizationCache.find(x=>x.id===id);
+ if(!project){realEl('realError').textContent='Nie znaleziono realizacji. Odśwież listę.';return;}
+ const name=project.project_name;
+ if(!confirm(`Trwale usunąć realizację „${name}”?\n\nZostaną usunięte jej dane, WSZYSTKIE kosztorysy i ich wersje oraz zdjęcia. Operacji nie można cofnąć.\n\nJeśli chcesz tylko ukryć ją z aktywnej listy, wybierz Anuluj lub Oznacz jako zrealizowaną.`))return;
+ const btn=realEl('realDeleteBtn');btn.disabled=true;
+ realEl('realError').textContent='Trwa usuwanie danych realizacji…';
+ try{
+  const {data,error}=await db.rpc('alladyn_delete_realization',{p_realization_id:id});
+  if(error)throw error;
+  if(!data||data.deleted!==true)throw Error('Nie uzyskano potwierdzenia usunięcia w bazie danych.');
+  if(linkedEstimateRealizationId===id){linkedEstimateRealizationId=null;linkedEstimateId=null;linkedEstimateVersion=0;updateEstimateToolbar();writeDraft();}
+  closeRealizationForm();
+  await loadRealizations();
+  const paths=Array.isArray(data.photo_paths)?data.photo_paths:[];
+  let failed=0;
+  for(let i=0;i<paths.length;i+=100){
+   const {error:storageError}=await db.storage.from(REAL_PHOTO_BUCKET).remove(paths.slice(i,i+100));
+   if(storageError)failed+=Math.min(100,paths.length-i);
+  }
+  const msg=failed?`Usunięto realizację „${name}” oraz powiązane dane. Uwaga: nie udało się usunąć części plików zdjęć (${failed}). Administrator powinien oczyścić folder ${id} w Supabase Storage.`:`Realizacja „${name}” została trwale usunięta wraz z kosztorysami i zdjęciami.`;
+  realEl('realStatus').textContent=msg;
+ }catch(err){btn.disabled=false;realEl('realError').textContent='Nie udało się usunąć realizacji: '+(err?.message||err)+'. Sprawdź, czy uruchomiono SQL v1.7.6.';}
 }
 
 
