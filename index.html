@@ -105,7 +105,7 @@
 .quote-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}.quote-actions button{font-size:.83rem}.quote-footnote{font-size:.8rem;color:#d6bc85}
 @media(max-width:760px){.estimate-toolbar .estimate-grid{grid-template-columns:1fr}}
 
-/* ALLADYN v1.7.3 — archiwum realizacji bez przenoszenia danych */
+/* ALLADYN v1.7.5 — archiwum realizacji bez przenoszenia danych */
 .real-views{display:flex;flex-wrap:wrap;gap:9px;margin:18px 0 13px}
 .real-view-btn{cursor:pointer;border:1px solid #705d32;border-radius:10px;padding:11px 16px;background:#1d1e1d;color:#e5ddca;font:inherit;font-weight:700}
 .real-view-btn.selected{background:#b99b56;color:#15140f;border-color:#d9bc75}
@@ -157,7 +157,7 @@
 
 <section id="realizations" class="panel">
   <h2>Realizacje</h2>
-  <p class="muted">Wspólny rejestr inwestycji dla upoważnionych administratorów. Zakończone i anulowane inwestycje automatycznie trafiają do Archiwum. Zdjęcia, kosztorysy i historia pozostają dostępne; ponowne otwarcie realizacji przywraca ją do Aktywnych.</p>
+  <p class="muted">Wspólny rejestr inwestycji dla upoważnionych administratorów. Zrealizowane i anulowane inwestycje automatycznie trafiają do Archiwum. Zdjęcia, kosztorysy i historia pozostają dostępne; ponowne otwarcie realizacji przywraca ją do Aktywnych.</p>
   <div class="real-views" role="group" aria-label="Widok realizacji">
     <button id="realActiveView" type="button" class="real-view-btn selected" onclick="setRealizationView('active')">● Aktywne <span id="realActiveCount">0</span></button>
     <button id="realArchiveView" type="button" class="real-view-btn" onclick="setRealizationView('archive')">▣ Archiwum <span id="realArchiveCount">0</span></button>
@@ -167,7 +167,7 @@
     <input id="realSearch" type="search" placeholder="Szukaj inwestycji, inwestora lub lokalizacji…" oninput="renderRealizations()">
     <select id="realStatusFilter" onchange="renderRealizations()" aria-label="Filtr statusu w archiwum" style="display:none">
       <option value="all">Wszystkie archiwalne</option>
-      <option value="completed">Zakończone</option>
+      <option value="completed">Zrealizowane</option>
       <option value="cancelled">Anulowane</option>
     </select>
     <button class="btn" onclick="loadRealizations()">Odśwież listę</button>
@@ -203,7 +203,7 @@
      <label>Planowana data rozpoczęcia<input id="realStart" type="date"></label>
      <label>Przewidywany czas realizacji (dni)<input id="realDays" type="number" min="0" step="1" placeholder="np. 5"></label>
      <label>Przewidywana data zakończenia<input id="realEnd" type="date"></label>
-     <label>Status<select id="realState" onchange="updateRealStatusHelp()"><option value="open">Otwarta</option><option value="completed">Zakończona</option><option value="cancelled">Anulowana przez klienta / zamknięta</option></select></label>
+     <label>Status<select id="realState" onchange="updateRealStatusHelp()"><option value="open">Otwarta</option><option value="completed">Zrealizowana</option><option value="cancelled">Anulowana przez klienta / zamknięta</option></select></label>
      <label class="wide">Zakres prac / co jest do zrobienia<textarea id="realScope" maxlength="10000" placeholder="np. przygotowanie podłoża, gruntowanie, masa 3 mm, układanie PCW z wywijkami"></textarea></label>
      <label class="wide">Planowane materiały / co będzie wykorzystane<textarea id="realMaterials" maxlength="10000" placeholder="np. grunt UZIN, masa Eurocol, wykładzina PCW, kleje, cokoły"></textarea></label>
      <label class="wide">Uwagi i ustalenia<textarea id="realNotes" maxlength="10000" placeholder="np. dostęp do obiektu, godziny prac, kontakt, warunki"></textarea></label>
@@ -228,7 +228,12 @@
 </section>
 <div id="realModalInfo" class="real-summary" style="margin-top:12px"></div>
     <div id="realError" class="real-error" role="alert"></div>
-    <div class="real-form-actions"><button class="btn gold" id="realSaveBtn" type="submit">Zapisz realizację</button><button class="btn" type="button" onclick="closeRealizationForm()">Anuluj</button></div>
+    <div id="realQuickStatusActions" class="real-form-actions" style="display:none;flex-wrap:wrap;border-top:1px solid rgba(200,170,90,.28);padding-top:16px;margin-top:16px">
+     <button id="realCompleteBtn" class="btn gold" type="button" onclick="quickChangeRealizationStatus('completed')">✓ Oznacz jako zrealizowaną</button>
+     <button id="realCancelBtn" class="btn" type="button" onclick="quickChangeRealizationStatus('cancelled')">✕ Anuluj realizację</button>
+     <button id="realReopenBtn" class="btn" type="button" style="display:none" onclick="quickChangeRealizationStatus('open')">↶ Przywróć do aktywnych</button>
+    </div>
+    <div class="real-form-actions"><button class="btn gold" id="realSaveBtn" type="submit">Zapisz realizację</button><button class="btn" type="button" onclick="closeRealizationForm()">Zamknij bez zapisywania</button></div>
    </form>
   </div>
  </div>
@@ -698,7 +703,7 @@ function setRealizationView(view){
  renderRealizations();
 }
 const REAL_PHOTO_BUCKET='alladyn-realization-photos';
-const REAL_STATUSES={open:'Otwarta',completed:'Zakończona',cancelled:'Anulowana'};
+const REAL_STATUSES={open:'Otwarta',completed:'Zrealizowana',cancelled:'Anulowana'};
 function realEl(id){return document.getElementById(id)}
 function realDate(date){if(!date)return 'Nie określono';const a=String(date).slice(0,10).split('-');return a.length===3?a[2]+'.'+a[1]+'.'+a[0]:String(date)}
 function realNumber(v){return v==null||v===''?'—':Number(v).toLocaleString('pl-PL',{maximumFractionDigits:2})}
@@ -738,9 +743,34 @@ function renderRealizations(){
   <div class="real-meta">${safeHtml(x.investor_name||'Inwestor niepodany')} · ${safeHtml(x.location||'Lokalizacja niepodana')}<br>
   ${x.area_m2==null?'Metraż niepodany':realNumber(x.area_m2)+' m²'} · Start: ${realDate(x.start_date)} · Plan: ${x.estimated_days==null?'—':x.estimated_days+' dni'}
   ${x.status!=='open'&&x.closed_at?'<br>Zamknięta: '+realDate(x.closed_at):''}</div></button>`).join(''):
-  `<div class="notice">${archive?'Archiwum jest puste lub brak wyników wyszukiwania. Zakończone i anulowane realizacje pojawią się tutaj automatycznie.':'Brak aktywnych realizacji dla wybranego wyszukiwania. Możesz dodać nową inwestycję lub zajrzeć do Archiwum.'}</div>`;
+  `<div class="notice">${archive?'Archiwum jest puste lub brak wyników wyszukiwania. Zrealizowane i anulowane realizacje pojawią się tutaj automatycznie.':'Brak aktywnych realizacji dla wybranego wyszukiwania. Możesz dodać nową inwestycję lub zajrzeć do Archiwum.'}</div>`;
 }
-function updateRealStatusHelp(){realEl('realClosureWrap').style.display=realEl('realState').value==='open'?'none':'block'}
+function updateRealStatusHelp(){
+ const status=realEl('realState').value;
+ realEl('realClosureWrap').style.display=status==='open'?'none':'block';
+ updateRealQuickStatusButtons();
+}
+function updateRealQuickStatusButtons(){
+ const wrap=realEl('realQuickStatusActions');if(!wrap)return;
+ wrap.style.display=activeRealizationId?'flex':'none';
+ const state=realEl('realState').value;
+ realEl('realCompleteBtn').style.display=state==='completed'?'none':'';
+ realEl('realCancelBtn').style.display=state==='cancelled'?'none':'';
+ realEl('realReopenBtn').style.display=state==='open'?'none':'';
+}
+async function quickChangeRealizationStatus(target){
+ if(!activeRealizationId||currentRole!=='admin'||!db)return;
+ const names={completed:'oznaczyć jako zrealizowaną',cancelled:'anulować',open:'przywrócić do aktywnych'};
+ if(!['completed','cancelled','open'].includes(target))return;
+ const project=realEl('realName').value.trim()||'tę realizację';
+ const detail=target==='completed'?'Prace zostały wykonane. Realizacja trafi do archiwum.':target==='cancelled'?'Prace nie doszły do skutku lub zostały przerwane. Realizacja trafi do archiwum.':'Realizacja wróci na listę aktywnych.';
+ if(!confirm(`Czy chcesz ${names[target]} realizację „${project}”?\n\n${detail}\n\nZdjęcia i kosztorysy pozostaną zachowane. Zostaną także zapisane bieżące zmiany w formularzu.`))return;
+ realEl('realState').value=target;
+ if(target==='open')realEl('realClosure').value='';
+ updateRealStatusHelp();
+ await saveRealization();
+}
+
 function openRealizationForm(id=null){
  if(currentRole!=='admin')return;
  const x=id?realizationCache.find(p=>p.id===id):null;
@@ -997,7 +1027,7 @@ function openEstimateVersion(id){
 }
 
 
-/* ALLADYN v1.7.3 — documents generated exclusively from a saved version snapshot. */
+/* ALLADYN v1.7.5 — documents generated exclusively from a saved version snapshot. */
 let pdfExportSelection=null;
 function pdfDateLocal(d){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return y+'-'+m+'-'+day}
 function pdfDatePL(value){const a=String(value||'').split('-');return a.length===3?a[2]+'.'+a[1]+'.'+a[0]:String(value||'—')}
