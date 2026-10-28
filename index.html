@@ -175,7 +175,7 @@
   <div class="controls"><button class="btn gold" onclick="systemAddRow()">+ Dodaj materiał</button><button class="btn" onclick="systemReset()">Nowy kosztorys / Wyczyść</button><span id="draftStatus" class="muted" style="align-self:center;font-size:.8rem" aria-live="polite">Zapis roboczy na tym urządzeniu</span></div>
   <div id="laborPanel" class="labor-panel" style="display:none">
     <h3>Usługi i transport — wycena wewnętrzna</h3>
-    <p class="muted">Koszt własny i cena netto dla klienta są wpisywane niezależnie. Wywijki są wliczone w montaż wykładziny. „Wykładzina z montażem” to łączna cena za materiał i usługę — nie doliczaj drugi raz tej samej wykładziny jako osobnego materiału.</p>
+    <p class="muted">Koszt własny i cena netto dla klienta są wpisywane niezależnie. „Montaż” obejmuje dowolny rodzaj podłogi. Każda usługa może być rozliczana za m² albo jedną kwotą ryczałtową (1 szt.) — nie doliczaj drugi raz tej samej wykładziny jako osobnego materiału.</p>
     <div id="laborRows"></div>
     <div id="transportRow"></div>
   </div>
@@ -538,10 +538,10 @@ function toggleCompare(n,on){on?selected.add(n):selected.delete(n);renderCompare
  let systemItems=[],systemCounter=0;
 // Wycena robocizny jest lokalna dla bieżącego kosztorysu. Nie zapisujemy jej w publicznym HTML ani w cenniku produktów.
 let laborItems=[
- {key:'priming',name:'Gruntowanie',area:null,cost:0,sale:0},
- {key:'leveling',name:'Wylewanie masy',area:null,cost:0,sale:0},
- {key:'flooring',name:'Montaż wykładziny (wywijki w cenie)',area:null,cost:0,sale:0},
- {key:'flooring_included',name:'Wykładzina z montażem (materiał i usługa)',area:null,cost:0,sale:0}
+ {key:'priming',name:'Gruntowanie',area:null,cost:0,sale:0,unit:'m2'},
+ {key:'leveling',name:'Wylewanie masy',area:null,cost:0,sale:0,unit:'m2'},
+ {key:'flooring',name:'Montaż',area:null,cost:0,sale:0,unit:'m2'},
+ {key:'flooring_included',name:'Wykładzina z montażem',area:null,cost:0,sale:0,unit:'m2'}
 ];
 let transportItem={cost:0,sale:0};
 // Drafts are local to this browser. Logged-in users use their individual UID; guest quotes use separate storage.
@@ -564,7 +564,7 @@ function loadDraft(){
   systemCounter=Math.max(Number(d.counter)||0,...items.map(i=>i.id),0);
   $('systemArea').value=d.area||'100';
   linkedEstimateRealizationId=d.link?.realizationId||null;linkedEstimateId=d.link?.estimateId||null;linkedEstimateVersion=Number(d.link?.version)||0;if($('estimateName'))$('estimateName').value=d.link?.title||'Wycena podstawowa';
-  for(const x of laborItems){let found=d.labor.find(y=>y.key===x.key);if(found)Object.assign(x,{area:found.area,cost:found.cost,sale:found.sale})}
+  for(const x of laborItems){let found=d.labor.find(y=>y.key===x.key);if(found)Object.assign(x,{area:found.area,cost:found.cost,sale:found.sale,unit:found.unit==='szt'?'szt':'m2'})}
   if(d.transport)transportItem={cost:d.transport.cost??0,sale:d.transport.sale??0};
   renderSystem();updateEstimateToolbar();
   if($('draftStatus'))$('draftStatus').textContent='Przywrócono ostatni kosztorys';
@@ -574,7 +574,7 @@ function loadDraft(){
 function resetDraft(){
  systemCounter=0;
  $('systemArea').value='100';
- laborItems.forEach(i=>{i.area=null;i.cost=0;i.sale=0});
+ laborItems.forEach(i=>{i.area=null;i.cost=0;i.sale=0;i.unit='m2'});
  transportItem={cost:0,sale:0};
  linkedEstimateRealizationId=null;linkedEstimateId=null;linkedEstimateVersion=0;if($('estimateName'))$('estimateName').value='Wycena podstawowa';
  systemItems=[];renderSystem();updateEstimateToolbar();writeDraft();
@@ -594,14 +594,32 @@ window.addEventListener('pagehide',()=>writeDraft());
 function laborNumber(value){const n=Number(value);return Number.isFinite(n)&&n>=0?n:null}
 function laborFieldChanged(key,field,value){const item=laborItems.find(x=>x.key===key);if(!item)return;item[field]=value;renderLaborTotalsOnly();writeDraft()}
 function transportChanged(field,value){transportItem[field]=value;renderLaborTotalsOnly();writeDraft()}
-function laborRowsHTML(){return laborItems.map(item=>{const a=item.area===null?systemDefaultArea():item.area;return `<div class="labor-item"><strong>${safeHtml(item.name)}</strong><div class="labor-fields"><label>Powierzchnia pracy (m²)<input type="number" min="0" step="0.1" value="${safeHtml(a)}" oninput="laborFieldChanged('${item.key}','area',this.value)"></label><label>Koszt własny netto (zł/m²)<input type="number" min="0" step="0.01" value="${safeHtml(item.cost)}" oninput="laborFieldChanged('${item.key}','cost',this.value)"></label><label>Cena dla klienta netto (zł/m²)<input type="number" min="0" step="0.01" value="${safeHtml(item.sale)}" oninput="laborFieldChanged('${item.key}','sale',this.value)"></label></div><div class="labor-result" id="laborResult_${item.key}"></div></div>`}).join('')}
+function laborUnit(item){return item.unit==='szt'?'szt':'m²'}
+function laborQuantity(item){return laborUnit(item)==='szt'?1:(item.area===null?systemDefaultArea():item.area)}
+function laborUnitChanged(key,unit){
+ const item=laborItems.find(x=>x.key===key);if(!item)return;
+ if(unit!=='szt'&&unit!=='m2')return;
+ const previous=laborUnit(item),next=unit==='szt'?'szt':'m²';
+ if(previous===next)return;
+ // Zachowujemy kwoty łączne przy zmianie jednostki, aby cena nie skakała.
+ const oldQty=Number(laborQuantity(item));const newQty=unit==='szt'?1:systemDefaultArea();
+ for(const field of ['cost','sale']){const val=Number(item[field]);if(Number.isFinite(val)&&newQty>0)item[field]=Number((val*oldQty/newQty).toFixed(4));}
+ item.unit=unit;item.area=unit==='szt'?1:systemDefaultArea();renderLabor();writeDraft();
+}
+function laborRowsHTML(){return laborItems.map(item=>{
+ const unit=laborUnit(item),a=laborQuantity(item);
+ const unitPicker=`<label>Jednostka rozliczenia<select onchange="laborUnitChanged('${item.key}',this.value)" style="display:block;width:100%;box-sizing:border-box;margin-top:6px;background:#1b1d1d;color:#eee;border:1px solid #595447;padding:10px;border-radius:8px"><option value="m2" ${unit==='m²'?'selected':''}>m² — za powierzchnię</option><option value="szt" ${unit==='szt'?'selected':''}>1 szt. — za całość</option></select></label>`;
+ const quantityField=unit==='szt'?'<label>Ilość<input type="number" value="1" disabled aria-label="Jedna usługa"></label>':`<label>Powierzchnia pracy (m²)<input type="number" min="0" step="0.1" value="${safeHtml(a)}" oninput="laborFieldChanged('${item.key}','area',this.value)"></label>`;
+ return `<div class="labor-item"><strong>${safeHtml(item.name)}</strong><div class="labor-fields">${unitPicker}${quantityField}<label>Koszt własny netto (zł/${unit})<input type="number" min="0" step="0.01" value="${safeHtml(item.cost)}" oninput="laborFieldChanged('${item.key}','cost',this.value)"></label><label>Cena dla klienta netto (zł/${unit})<input type="number" min="0" step="0.01" value="${safeHtml(item.sale)}" oninput="laborFieldChanged('${item.key}','sale',this.value)"></label></div><div class="labor-result" id="laborResult_${item.key}"></div></div>`
+ }).join('')}
+
 function renderLabor(){const visible=currentRole==='admin'&&!!currentUser, panel=$('laborPanel');if(!panel)return;panel.style.display=visible?'block':'none';if(!visible)return;
  $('laborRows').innerHTML=laborRowsHTML();
  $('transportRow').innerHTML=`<div class="labor-item"><strong>Transport — kwota za całą realizację</strong><div class="labor-fields"><label>Koszt własny transportu netto (zł)<input type="number" min="0" step="0.01" value="${safeHtml(transportItem.cost)}" oninput="transportChanged('cost',this.value)"></label><label>Cena dla klienta netto (zł)<input type="number" min="0" step="0.01" value="${safeHtml(transportItem.sale)}" oninput="transportChanged('sale',this.value)"></label></div><div class="labor-result" id="transportResult"></div></div>`;
  renderLaborTotalsOnly();
 }
 function getLaborTotals(){let cost=0,revenue=0,errors=[];
- for(let item of laborItems){let a=laborNumber(item.area===null?systemDefaultArea():item.area),c=laborNumber(item.cost),p=laborNumber(item.sale);if(a===null||c===null||p===null){errors.push('Uzupełnij poprawnie: '+item.name);continue}cost+=a*c;revenue+=a*p;const el=$('laborResult_'+item.key);if(el)el.innerHTML=`Koszt własny: <b>${cash(a*c)}</b> • Klient: <b>${cash(a*p)}</b> • Różnica: <b>${cash(a*(p-c))}</b>`}
+ for(let item of laborItems){let a=laborNumber(laborQuantity(item)),c=laborNumber(item.cost),p=laborNumber(item.sale);if(a===null||c===null||p===null){errors.push('Uzupełnij poprawnie: '+item.name);continue}cost+=a*c;revenue+=a*p;const el=$('laborResult_'+item.key);if(el)el.innerHTML=`Koszt własny: <b>${cash(a*c)}</b> • Klient: <b>${cash(a*p)}</b> • Różnica: <b>${cash(a*(p-c))}</b>`}
  const tc=laborNumber(transportItem.cost),tr=laborNumber(transportItem.sale);if(tc===null||tr===null)errors.push('Uzupełnij poprawnie: transport');else{cost+=tc;revenue+=tr;const el=$('transportResult');if(el)el.innerHTML=`Koszt własny: <b>${cash(tc)}</b> • Klient: <b>${cash(tr)}</b> • Różnica: <b>${cash(tr-tc)}</b>`}
  return {cost,revenue,profit:revenue-cost,errors};
 }
@@ -1182,7 +1200,7 @@ function estimateSnapshot(){
  const area=estimateSanitizeNumber($('systemArea').value,'powierzchnia podłogi',true);
  // Można zapisać kosztorys samej robocizny lub transportu.
  // Pusta wycena bez wartościowych pozycji pozostaje niedozwolona.
- const anyLabor=laborItems.some(l=>{const a=Number(l.area===null?area:l.area),c=Number(l.cost),v=Number(l.sale);return a>0&&(c>0||v>0)});
+ const anyLabor=laborItems.some(l=>{const a=Number(laborQuantity(l)),c=Number(l.cost),v=Number(l.sale);return a>0&&(c>0||v>0)});
  const anyTransport=Number(transportItem.cost)>0||Number(transportItem.sale)>0;
  if(!systemItems.length&&!anyLabor&&!anyTransport)throw Error('Dodaj przynajmniej jedną pozycję: materiał, usługę robocizny lub transport.');
  const items=[];let costUsed=0,costBuy=0,revenueMaterials=0;
@@ -1202,7 +1220,7 @@ function estimateSnapshot(){
    costUsed+=qty*price;costBuy+=purchase;revenueMaterials+=materialRevenue;
  }
  const labor=[];let laborCost=0,laborRevenue=0;
- for(const l of laborItems){const a=estimateSanitizeNumber(l.area===null?area:l.area,'powierzchnia pracy '+l.name),c=estimateSanitizeNumber(l.cost,'koszt '+l.name),v=estimateSanitizeNumber(l.sale,'cena '+l.name);labor.push({key:l.key,name:l.name,area:a,costNetM2:c,saleNetM2:v,costNet:a*c,revenueNet:a*v});laborCost+=a*c;laborRevenue+=a*v;}
+ for(const l of laborItems){const unit=laborUnit(l),a=estimateSanitizeNumber(laborQuantity(l),'ilość pracy '+l.name),c=estimateSanitizeNumber(l.cost,'koszt '+l.name),v=estimateSanitizeNumber(l.sale,'cena '+l.name);labor.push({key:l.key,name:l.name,area:a,unit:unit==='szt'?'szt':'m2',costNetM2:c,saleNetM2:v,costNet:a*c,revenueNet:a*v});laborCost+=a*c;laborRevenue+=a*v;}
  const transportCost=estimateSanitizeNumber(transportItem.cost,'transport koszt'),transportSale=estimateSanitizeNumber(transportItem.sale,'transport sprzedaż');
  const totalCost=costBuy+laborCost+transportCost,totalRevenue=revenueMaterials+laborRevenue+transportSale;
  return {schema:1,areaM2:area,items,labor,transport:{costNet:transportCost,revenueNet:transportSale},totals:{materialUsedNet:costUsed,materialPurchaseNet:costBuy,materialRevenueNet:revenueMaterials,laborTransportCostNet:laborCost+transportCost,laborTransportRevenueNet:laborRevenue+transportSale,totalCostNet:totalCost,totalRevenueNet:totalRevenue,profitNet:totalRevenue-totalCost},priceMode:'snapshot',savedAtClient:new Date().toISOString()};
@@ -1278,7 +1296,7 @@ function estimateVersionById(id){return estimateViewCache.find(x=>x.id===id)}
 function previewEstimateVersion(id){
  const v=estimateVersionById(id);if(!v)return;
  const s=v.snapshot||{},t=s.totals||{},rows=(s.items||[]).map(i=>`<tr><td>${safeHtml(i.productName||'—')}</td><td>${formatPL(i.area||0,2)} m²</td><td>${formatPL(i.qtyKg||0,2)} kg</td><td>${formatPL(i.priceNetKg||0,2)} zł/kg</td><td>${cash(i.purchaseNet||0)}</td><td>${cash(i.revenueNet||0)}</td></tr>`).join('');
- const labor=(s.labor||[]).filter(l=>(Number(l.costNet)||0)!==0||(Number(l.revenueNet)||0)!==0).map(l=>`<tr><td>${safeHtml(l.name)}</td><td>${formatPL(l.area||0,2)} m²</td><td>${cash(l.costNet||0)}</td><td>${cash(l.revenueNet||0)}</td></tr>`).join('');
+ const labor=(s.labor||[]).filter(l=>(Number(l.costNet)||0)!==0||(Number(l.revenueNet)||0)!==0).map(l=>`<tr><td>${safeHtml(l.name)}</td><td>${formatPL(l.area||0,2)} ${l.unit==='szt'?'szt.':'m²'}</td><td>${cash(l.costNet||0)}</td><td>${cash(l.revenueNet||0)}</td></tr>`).join('');
  $('estimatePreviewBody').innerHTML=`<div class="controls"><button class="btn gold" onclick="configureEstimatePdf('${v.id}','client')">Oferta PDF</button><button class="btn" onclick="configureEstimatePdf('${v.id}','internal')">Wewnętrzny PDF</button></div><h2>Wycena — wersja ${v.version_number}</h2><p class="quote-footnote">Niezmienna kopia cen netto i parametrów z dnia zapisu: ${displayDate(v.created_at)}.</p><div class="table-wrap"><table class="system-total-table"><thead><tr><th>Materiał</th><th>Powierzchnia</th><th>Zużycie z zapasem</th><th>Cena zapis.</th><th>Zakup netto</th><th>Przychód netto</th></tr></thead><tbody>${rows}</tbody></table></div><h3>Robocizna</h3><div class="table-wrap"><table class="system-total-table"><thead><tr><th>Praca</th><th>Powierzchnia</th><th>Koszt</th><th>Przychód</th></tr></thead><tbody>${labor}</tbody></table></div><div class="labor-summary">Transport: koszt ${cash(s.transport?.costNet||0)}, przychód ${cash(s.transport?.revenueNet||0)}<hr>Zakup materiałów: <b>${cash(t.materialPurchaseNet||0)}</b><br>Łączny koszt własny: <b>${cash(t.totalCostNet||0)}</b><br>Łączny przychód: <b>${cash(t.totalRevenueNet||0)}</b><br>Potencjalny wynik: <b>${markupProfit(t.profitNet||0)}</b></div>`;
  $('estimatePreview').classList.add('on');document.body.style.overflow='hidden';
 }
@@ -1292,7 +1310,7 @@ function openEstimateVersion(id){
   mapped.push({id:mapped.length+1,pi,area:r.area,mm:r.mm||2,variant:r.variant||'avg',pack:'custom',customPack:r.packKg,waste:r.wastePct,multiplier:r.multiplier,lockedPriceKg:r.priceNetKg});}
  const est=realQuoteCache.find(e=>e.id===v.estimate_id);
  closeRealizationForm();systemItems=mapped;systemCounter=mapped.length;$('systemArea').value=s.areaM2||100;
- for(const l of laborItems){const saved=(s.labor||[]).find(x=>x.key===l.key);if(saved){l.area=saved.area;l.cost=saved.costNetM2;l.sale=saved.saleNetM2}else{l.area=null;l.cost=0;l.sale=0}}
+ for(const l of laborItems){const saved=(s.labor||[]).find(x=>x.key===l.key);if(saved){l.area=saved.area;l.cost=saved.costNetM2;l.sale=saved.saleNetM2;l.unit=saved.unit==='szt'?'szt':'m2'}else{l.area=null;l.cost=0;l.sale=0;l.unit='m2'}}
  transportItem={cost:s.transport?.costNet??0,sale:s.transport?.revenueNet??0};
  linkedEstimateRealizationId=est?.realization_id||null;linkedEstimateId=v.estimate_id;linkedEstimateVersion=v.version_number;
  $('estimateName').value=est?.title||'Wycena podstawowa';renderSystem();updateEstimateToolbar();writeDraft();document.querySelector('[data-tab=system]').click();
@@ -1340,8 +1358,8 @@ function renderEstimatePdfHtml(v,e,r,kind,num,issue,valid,vatRate){
   else{rows.push([descr,pdfNumber(area)+' m²',pdfNumber(i.qtyKg)+' kg',pdfNumber(i.packages)+' × '+pdfNumber(i.packKg)+' kg',pdfMoney(i.purchaseNet),pdfMoney(revenue)])}
  }
  const materialHeads=client?['Materiał','Powierzchnia','Cena netto / m²','Wartość netto','Wartość brutto']:['Materiał','Powierzchnia','Zapotrzebowanie','Opakowania','Zakup netto','Sprzedaż netto'];
- const laborRows=(s.labor||[]).filter(l=>Number(l.area)>0&&(Number(l.costNet)>0||Number(l.revenueNet)>0)).map(l=>client?[pdfEsc(l.name),pdfNumber(l.area)+' m²',pdfMoney(l.saleNetM2)+' / m²',pdfMoney(l.revenueNet),pdfMoney(gross(l.revenueNet))]:[pdfEsc(l.name),pdfNumber(l.area)+' m²',pdfMoney(l.costNetM2)+' / m²',pdfMoney(l.saleNetM2)+' / m²',pdfMoney(l.costNet),pdfMoney(l.revenueNet)]);
- const laborHeads=client?['Rodzaj pracy','Powierzchnia','Cena netto / m²','Wartość netto','Wartość brutto']:['Rodzaj pracy','Powierzchnia','Koszt własny / m²','Cena klienta / m²','Koszt własny','Sprzedaż'];
+ const laborRows=(s.labor||[]).filter(l=>Number(l.area)>0&&(Number(l.costNet)>0||Number(l.revenueNet)>0)).map(l=>client?[pdfEsc(l.name),pdfNumber(l.area)+(l.unit==='szt'?' szt.':' m²'),pdfMoney(l.saleNetM2)+(l.unit==='szt'?' / szt.':' / m²'),pdfMoney(l.revenueNet),pdfMoney(gross(l.revenueNet))]:[pdfEsc(l.name),pdfNumber(l.area)+(l.unit==='szt'?' szt.':' m²'),pdfMoney(l.costNetM2)+(l.unit==='szt'?' / szt.':' / m²'),pdfMoney(l.saleNetM2)+(l.unit==='szt'?' / szt.':' / m²'),pdfMoney(l.costNet),pdfMoney(l.revenueNet)]);
+ const laborHeads=client?['Rodzaj pracy','Ilość','Cena netto / jedn.','Wartość netto','Wartość brutto']:['Rodzaj pracy','Ilość','Koszt / jedn.','Cena / jedn.','Koszt własny','Sprzedaż'];
  const tr=s.transport||{},hasTransport=(Number(tr.costNet)||0)!==0||(Number(tr.revenueNet)||0)!==0;
  if(hasTransport){laborRows.push(client?['Transport','1 usługa',pdfMoney(tr.revenueNet),pdfMoney(tr.revenueNet),pdfMoney(gross(tr.revenueNet))]:['Transport','1 usługa',pdfMoney(tr.costNet),pdfMoney(tr.revenueNet),pdfMoney(tr.costNet),pdfMoney(tr.revenueNet)])}
  const headerLogo=document.querySelector('.site-head img')||document.querySelector('header img');
